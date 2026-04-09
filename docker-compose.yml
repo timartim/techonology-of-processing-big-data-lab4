@@ -46,26 +46,34 @@ services:
       - "9092:9092"
     volumes:
       - kafka_data:/var/lib/kafka/data
-      - ./kafka/server.properties:/etc/kafka/server.properties:ro
-    command:
-      - bash
-      - -lc
-      - |
-        if [ ! -f /var/lib/kafka/data/meta.properties ]; then
-          CLUSTER_ID="$$(kafka-storage.sh random-uuid)"
-          kafka-storage.sh format --ignore-formatted --cluster-id "$$CLUSTER_ID" -c /etc/kafka/server.properties
-        fi
-        exec kafka-server-start.sh /etc/kafka/server.properties
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+      KAFKA_NUM_PARTITIONS: 1
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
     healthcheck:
       test:
         [
           "CMD-SHELL",
-          "kafka-topics.sh --bootstrap-server localhost:9092 --list >/dev/null 2>&1"
+          "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list >/dev/null 2>&1"
         ]
       interval: 10s
       timeout: 5s
-      retries: 15
-      start_period: 20s
+      retries: 20
+      start_period: 40s
 
   web:
     build:
@@ -82,6 +90,7 @@ services:
       VAULT_SECRET_ID_FILE: /vault-bootstrap/secret_id
       VAULT_KV_MOUNT: app
       VAULT_REDIS_SECRET_PATH: catdog/redis
+      VAULT_KAFKA_SECRET_PATH: catdog/kafka
       MODEL_VERSION: ${MODEL_VERSION:-1.0.0}
       MODEL_DEVICE: ${MODEL_DEVICE:-cpu}
       CLASSIFIER_KEY: ${CLASSIFIER_KEY:-LOG_REG}
@@ -103,6 +112,7 @@ services:
       VAULT_SECRET_ID_FILE: /vault-bootstrap/secret_id
       VAULT_KV_MOUNT: app
       VAULT_REDIS_SECRET_PATH: catdog/redis
+      VAULT_KAFKA_SECRET_PATH: catdog/kafka
     volumes:
       - ./.vault-local:/vault-bootstrap:ro
     depends_on:
