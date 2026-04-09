@@ -1,0 +1,80 @@
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: catdog-redis
+    restart: unless-stopped
+    command: ["redis-server", "/usr/local/etc/redis/redis.conf"]
+    volumes:
+      - redis_data:/data
+      - ./redis/redis.conf:/usr/local/etc/redis/redis.conf:ro
+    secrets:
+      - redis_username
+      - redis_password
+      - redis_users_acl
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "redis-cli --user \"$$(cat /run/secrets/redis_username)\" --pass \"$$(cat /run/secrets/redis_password)\" ping | grep PONG"
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
+  vault:
+    image: hashicorp/vault:1.21
+    container_name: catdog-vault
+    restart: unless-stopped
+    cap_add:
+      - IPC_LOCK
+    command: ["vault", "server", "-config=/vault/config/vault.hcl"]
+    ports:
+      - "8200:8200"
+    volumes:
+      - vault_file:/vault/file
+      - ./vault/vault.hcl:/vault/config/vault.hcl:ro
+    environment:
+      VAULT_ADDR: http://127.0.0.1:8200
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ${IMAGE:-akp1n/catdog-api:latest}
+    restart: unless-stopped
+    ports:
+      - "${APP_PORT:-8001}:8000"
+    command: ["./entrypoint.sh"]
+    environment:
+      VAULT_ADDR: http://vault:8200
+      VAULT_ROLE_ID_FILE: /vault-bootstrap/role_id
+      VAULT_SECRET_ID_FILE: /vault-bootstrap/secret_id
+      VAULT_KV_MOUNT: app
+      VAULT_SECRET_PATH: catdog/redis
+      MODEL_VERSION: ${MODEL_VERSION:-1.0.0}
+      MODEL_DEVICE: ${MODEL_DEVICE:-cpu}
+      CLASSIFIER_KEY: ${CLASSIFIER_KEY:-LOG_REG}
+    volumes:
+      - ./.vault-local:/vault-bootstrap:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+
+volumes:
+  redis_data:
+  vault_file:
+
+secrets:
+  redis_host:
+    file: ./secrets/redis_host.txt
+  redis_port:
+    file: ./secrets/redis_port.txt
+  redis_db:
+    file: ./secrets/redis_db.txt
+  redis_username:
+    file: ./secrets/redis_username.txt
+  redis_password:
+    file: ./secrets/redis_password.txt
+  redis_users_acl:
+    file: ./secrets/redis_users.acl

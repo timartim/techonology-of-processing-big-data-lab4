@@ -1,0 +1,177 @@
+name: CD Dog or Cat Test
+
+on:
+  workflow_run:
+    workflows: ["CI (docker compose)"]
+    types:
+      - completed
+
+env:
+  IMAGE: akp1n/catdog-api:latest
+  APP_PORT: "8001"
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main' }}
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create runtime secret files
+        shell: bash
+        run: |
+          set +x
+          mkdir -p secrets .vault-local
+
+          printf "%s" "${{ secrets.REDIS_HOST_INTERNAL }}" > secrets/redis_host.txt
+          printf "%s" "${{ secrets.REDIS_PORT_INTERNAL }}" > secrets/redis_port.txt
+          printf "%s" "${{ secrets.REDIS_DB_INDEX }}" > secrets/redis_db.txt
+          printf "%s" "${{ secrets.REDIS_APP_USERNAME }}" > secrets/redis_username.txt
+          printf "%s" "${{ secrets.REDIS_APP_PASSWORD }}" > secrets/redis_password.txt
+
+          echo "::add-mask::${{ secrets.REDIS_APP_PASSWORD }}"
+
+          cat > secrets/redis_users.acl <<EOF
+          user default off
+          user ${{ secrets.REDIS_APP_USERNAME }} on >${{ secrets.REDIS_APP_PASSWORD }} ~prediction:* ~predictions:* +ping +hset +hgetall +zadd +zrevrange +multi +exec +select +client
+          EOF
+
+          chmod 644 secrets/redis_*
+
+      - name: Make bootstrap script executable
+        run: chmod +x scripts/bootstrap_vault.sh
+
+      - name: Pull image
+        run: docker pull $IMAGE
+
+      - name: Start vault and redis
+        run: |
+          IMAGE=$IMAGE APP_PORT=$APP_PORT docker compose up -d --no-build vault redis
+
+      - name: Bootstrap Vault
+        env:
+          REDIS_HOST: ${{ secrets.REDIS_HOST_INTERNAL }}
+          REDIS_PORT: ${{ secrets.REDIS_PORT_INTERNAL }}
+          REDIS_DB: ${{ secrets.REDIS_DB_INDEX }}
+          REDIS_USERNAME: ${{ secrets.REDIS_APP_USERNAME }}
+          REDIS_PASSWORD: ${{ secrets.REDIS_APP_PASSWORD }}
+        run: ./scripts/bootstrap_vault.sh
+
+      - name: Start web
+        run: |
+          IMAGE=$IMAGE APP_PORT=$APP_PORT docker compose up -d --no-build web
+
+      - name: Wait for API
+        run: |
+          for i in {1..30}; do
+            if curl -fsS "http://localhost:${APP_PORT}/docs" >/dev/null; then
+              echo "API is up"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "API did not start"
+          docker compose logs --no-color vault || true
+          docker compose logs --no-color redis || true
+          docker compose logs --no-color web || true
+          exit 1
+
+      - name: Functional test (POST /predict twice)
+        run: |
+          CAT_FILE="tests/images/cat.411.jpg"
+          DOG_FILE="tests/images/dog.120.jpg"
+
+          echo "=== CAT ==="
+          CAT_STATUS=$(curl -s -o cat_resp.json -w "%{http_code}" \
+            -F "file=@${CAT_FILE}" \
+            http://localhost:${APP_PORT}/predict)
+          echo "HTTP status: $CAT_STATUS"
+          cat cat_resp.json
+          test "$CAT_STATUS" = "200"
+
+          echo "=== DOG ==="
+          DOG_STATUS=$(curl -s -o dog_resp.json -w "%{http_code}" \
+            -F "file=@${DOG_FILE}" \
+            http://localhost:${APP_PORT}/predict)
+          echo "HTTP status: $DOG_STATUS"
+          cat dog_resp.json
+          test "$DOG_STATUS" = "200"
+
+          python - << 'PY'
+          import json
+
+          def load_p(path):
+              data = json.load(open(path, "r", encoding="utf-8"))
+              assert "dogProbability" in data, data
+              p = data["dogProbability"]
+              assert isinstance(p, (int, float)), type(p)
+              assert 0.0 <= p <= 1.0, p
+              return float(p)
+
+          cat_p = load_p("cat_resp.json")
+          dog_p = load_p("dog_resp.json")
+
+          print("cat dogProbability =", cat_p)
+          print("dog dogProbability =", dog_p)
+          assert cat_p < 0.5, f"Expected cat_p < 0.5, got {cat_p}"
+          assert dog_p > 0.5, f"Expected dog_p > 0.5, got {dog_p}"
+          print("predict OK")
+          PY
+
+      - name: Functional test (GET /predictions)
+        run: |
+          STATUS=$(curl -s -o preds.json -w "%{http_code}" \
+            "http://localhost:${APP_PORT}/predictions?limit=10")
+          echo "PREDICTIONS status: $STATUS"
+          test "$STATUS" = "200"
+
+          python - << 'PY'
+          import json
+
+          with open("cat_resp.json", "r", encoding="utf-8") as f:
+              cat_resp = json.load(f)
+
+          with open("dog_resp.json", "r", encoding="utf-8") as f:
+              dog_resp = json.load(f)
+
+          with open("preds.json", "r", encoding="utf-8") as f:
+              preds = json.load(f)
+
+          assert isinstance(preds, list), preds
+          assert len(preds) >= 2, preds
+
+          required_ids = {
+              cat_resp["predictionId"],
+              dog_resp["predictionId"],
+          }
+
+          found_ids = {item["predictionId"] for item in preds}
+          missing = required_ids - found_ids
+
+          assert not missing, f"Missing predictionIds in /predictions: {missing}"
+
+          for item in preds:
+              assert "predictionId" in item, item
+              assert "fileName" in item, item
+              assert "createdAt" in item, item
+              assert "dogProbability" in item, item
+              assert "predictedLabel" in item, item
+              assert "modelVersion" in item, item
+
+          print("predictions API OK")
+          PY
+
+      - name: Logs on failure
+        if: failure()
+        run: |
+          docker compose logs --no-color vault || true
+          docker compose logs --no-color redis || true
+          docker compose logs --no-color web || true
+
+      - name: Cleanup
+        if: always()
+        run: |
+          docker compose down -v --remove-orphans || true
+          rm -rf secrets .vault-local
