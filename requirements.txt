@@ -9,7 +9,7 @@ pyyaml>=6.0.1
 pillow>=10.0.0
 tqdm>=4.66.0
 
-# pytorch (CPU)
+# pytorch
 torch>=2.2.0
 torchvision>=0.17.0
 
@@ -27,3 +27,6 @@ redis>=5,<8
 dvc>=3.0.0
 dvc-gdrive>=3.0.0
 fsspec<2025.7.0
+
+#kafka
+aiokafka
