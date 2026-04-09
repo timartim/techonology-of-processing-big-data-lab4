@@ -34,13 +34,8 @@ class PredictionRepository:
         if not raw_ids:
             return []
 
-        prediction_ids = [
-            item.decode("utf-8") if isinstance(item, bytes) else item
-            for item in raw_ids
-        ]
-
         pipe = self.redis.pipeline()
-        for prediction_id in prediction_ids:
+        for prediction_id in raw_ids:
             pipe.hgetall(f"prediction:{prediction_id}")
 
         raw_predictions = await pipe.execute()
@@ -51,20 +46,61 @@ class PredictionRepository:
             if not item:
                 continue
 
-            normalized = {
-                (k.decode("utf-8") if isinstance(k, bytes) else k):
-                    (v.decode("utf-8") if isinstance(v, bytes) else v)
-                for k, v in item.items()
-            }
+            result.append(
+                PredictionRecord(
+                    predictionId=item["predictionId"],
+                    fileName=item["fileName"],
+                    createdAt=datetime.fromisoformat(item["createdAt"]),
+                    dogProbability=float(item["dogProbability"]),
+                    predictedLabel=item["predictedLabel"],
+                    modelVersion=item["modelVersion"],
+                )
+            )
+
+        return result
+
+    async def get_consumed_by_id(self, prediction_id: str) -> PredictionRecord | None:
+        key = f"prediction-consumed:{prediction_id}"
+        item = await self.redis.hgetall(key)
+
+        if not item:
+            return None
+
+        return PredictionRecord(
+            predictionId=item["predictionId"],
+            fileName=item["fileName"],
+            createdAt=datetime.fromisoformat(item["createdAt"]),
+            dogProbability=float(item["dogProbability"]),
+            predictedLabel=item["predictedLabel"],
+            modelVersion=item["modelVersion"],
+        )
+
+    async def get_last_consumed(self, limit: int) -> list[PredictionRecord]:
+        raw_ids = await self.redis.zrevrange("predictions:consumed:by_time", 0, limit - 1)
+
+        if not raw_ids:
+            return []
+
+        pipe = self.redis.pipeline()
+        for prediction_id in raw_ids:
+            pipe.hgetall(f"prediction-consumed:{prediction_id}")
+
+        raw_predictions = await pipe.execute()
+
+        result: list[PredictionRecord] = []
+
+        for item in raw_predictions:
+            if not item:
+                continue
 
             result.append(
                 PredictionRecord(
-                    predictionId=normalized["predictionId"],
-                    fileName=normalized["fileName"],
-                    createdAt=datetime.fromisoformat(normalized["createdAt"]),
-                    dogProbability=float(normalized["dogProbability"]),
-                    predictedLabel=normalized["predictedLabel"],
-                    modelVersion=normalized["modelVersion"],
+                    predictionId=item["predictionId"],
+                    fileName=item["fileName"],
+                    createdAt=datetime.fromisoformat(item["createdAt"]),
+                    dogProbability=float(item["dogProbability"]),
+                    predictedLabel=item["predictedLabel"],
+                    modelVersion=item["modelVersion"],
                 )
             )
 

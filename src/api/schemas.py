@@ -18,3 +18,7 @@ class PredictionRecord(BaseModel):
     dogProbability: float
     predictedLabel: str
     modelVersion: str
+
+class PredictionWithConsumerStatus(BaseModel):
+    prediction: PredictionRecord
+    consumerProcessed: bool

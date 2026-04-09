@@ -1,3 +1,4 @@
+import asyncio
 from datetime import datetime, timezone
 from io import BytesIO
 from uuid import uuid4
@@ -5,7 +6,7 @@ from uuid import uuid4
 from fastapi import HTTPException
 from PIL import Image, UnidentifiedImageError
 
-from src.api.schemas import PredictionRecord
+from src.api.schemas import PredictionRecord, PredictionWithConsumerStatus
 from src.api.repositories.prediction_repository import PredictionRepository
 
 
@@ -15,13 +16,34 @@ class PredictionService:
         ml_service,
         repository: PredictionRepository,
         model_version: str,
-        prediction_repository
+        prediction_repository,
+        event_producer=None,
     ) -> None:
         self.ml_service = ml_service
         self.repository = repository
         self.model_version = model_version
         self.prediction_repository = prediction_repository
-    async def predict_and_save(self, file_bytes: bytes, file_name: str) -> PredictionRecord:
+        self.event_producer = event_producer
+
+    async def _wait_until_consumed(
+        self,
+        prediction_id: str,
+        timeout_seconds: float = 5.0,
+        poll_interval: float = 0.2,
+    ) -> bool:
+        elapsed = 0.0
+
+        while elapsed < timeout_seconds:
+            consumed = await self.prediction_repository.get_consumed_by_id(prediction_id)
+            if consumed is not None:
+                return True
+
+            await asyncio.sleep(poll_interval)
+            elapsed += poll_interval
+
+        return False
+
+    async def predict_and_save(self, file_bytes: bytes, file_name: str) -> PredictionWithConsumerStatus:
         try:
             img = Image.open(BytesIO(file_bytes)).convert("RGB")
         except UnidentifiedImageError as exc:
@@ -53,8 +75,19 @@ class PredictionService:
             modelVersion=self.model_version,
         )
 
-        await self.repository.save(prediction)
-        return prediction
+        consumer_processed = False
+
+        if self.event_producer is not None:
+            await self.event_producer.publish_prediction(prediction)
+            consumer_processed = await self._wait_until_consumed(prediction.predictionId)
+
+        return PredictionWithConsumerStatus(
+            prediction=prediction,
+            consumerProcessed=consumer_processed,
+        )
 
     async def get_last_predictions(self, limit: int) -> list[PredictionRecord]:
         return await self.prediction_repository.get_last(limit)
+
+    async def get_last_consumed_predictions(self, limit: int) -> list[PredictionRecord]:
+        return await self.prediction_repository.get_last_consumed(limit)
