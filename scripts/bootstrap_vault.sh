@@ -12,6 +12,10 @@ REDIS_DB="${REDIS_DB:-0}"
 REDIS_USERNAME="${REDIS_USERNAME:-model_writer}"
 REDIS_PASSWORD="${REDIS_PASSWORD:-strong_password}"
 
+KAFKA_BOOTSTRAP_SERVERS="${KAFKA_BOOTSTRAP_SERVERS:-kafka:9092}"
+KAFKA_TOPIC_PREDICTIONS="${KAFKA_TOPIC_PREDICTIONS:-predictions.created}"
+KAFKA_CONSUMER_GROUP="${KAFKA_CONSUMER_GROUP:-catdog-consumer}"
+
 mkdir -p "$OUT_DIR"
 
 need_cmd() {
@@ -157,6 +161,15 @@ write_redis_secret() {
     password='$REDIS_PASSWORD' >/dev/null"
 }
 
+write_kafka_secret() {
+  local token="$1"
+  vault_exec "export VAULT_TOKEN='$token'; vault kv put -mount=app catdog/kafka \
+    bootstrapServers='$KAFKA_BOOTSTRAP_SERVERS' \
+    topicPredictions='$KAFKA_TOPIC_PREDICTIONS' \
+    consumerGroup='$KAFKA_CONSUMER_GROUP' >/dev/null"
+}
+
+
 write_policy_and_role() {
   local token="$1"
 
@@ -197,12 +210,16 @@ main() {
   echo "Записываю Redis secret..."
   write_redis_secret "$token"
 
+  echo "Записываю Kafka secret..."
+  write_kafka_secret "$token"
+
   echo "Создаю policy и role..."
   write_policy_and_role "$token"
 
   echo
   echo "Готово."
-  echo "Секрет:      app/catdog/redis"
+  echo "Секрет Redis: app/catdog/redis"
+  echo "Секрет Kafka: app/catdog/kafka"
   echo "init.json:   $OUT_DIR/init.json"
   echo "role_id:     $OUT_DIR/role_id"
   echo "secret_id:   $OUT_DIR/secret_id"

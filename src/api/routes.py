@@ -1,7 +1,7 @@
 from fastapi import APIRouter, File, UploadFile, HTTPException, Request
 from fastapi.params import Query
 
-from src.api.schemas import PredictResponse, PredictionRecord
+from src.api.schemas import PredictResponse, PredictionRecord, PredictionWithConsumerStatus
 
 router = APIRouter()
 
@@ -10,7 +10,7 @@ def get_service(request: Request):
     return request.app.state.prediction_service
 
 
-@router.post("/predict", response_model=PredictResponse)
+@router.post("/predict", response_model=PredictionWithConsumerStatus)
 async def predict(request: Request, file: UploadFile = File(...)):
     if not file.content_type or not file.content_type.startswith("image/"):
         raise HTTPException(status_code=400, detail="Upload an image file")
@@ -25,7 +25,7 @@ async def predict(request: Request, file: UploadFile = File(...)):
         file_name=file.filename or "unknown",
     )
 
-    return PredictResponse(**result.model_dump())
+    return result
 
 @router.get("/predictions", response_model=list[PredictionRecord])
 async def get_last_predictions(
@@ -33,4 +33,4 @@ async def get_last_predictions(
     limit: int = Query(10, ge=1, le=100),
 ):
     service = get_service(request)
-    return await service.get_last_predictions(limit)
+    return await service.get_last_consumed_predictions(limit)
