@@ -86,8 +86,5 @@ class PredictionService:
             consumerProcessed=consumer_processed,
         )
 
-    async def get_last_predictions(self, limit: int) -> list[PredictionRecord]:
-        return await self.prediction_repository.get_last(limit)
-
     async def get_last_consumed_predictions(self, limit: int) -> list[PredictionRecord]:
         return await self.prediction_repository.get_last_consumed(limit)
