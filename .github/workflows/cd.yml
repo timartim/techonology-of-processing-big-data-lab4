@@ -35,7 +35,7 @@ jobs:
 
           cat > secrets/redis_users.acl <<EOF
           user default off
-          user ${{ secrets.REDIS_APP_USERNAME }} on >${{ secrets.REDIS_APP_PASSWORD }} ~prediction:* ~predictions:* +ping +hset +hgetall +zadd +zrevrange +multi +exec +select +client
+          user ${{ secrets.REDIS_APP_USERNAME }} on >${{ secrets.REDIS_APP_PASSWORD }} ~prediction:* ~predictions:* ~prediction-consumed:* ~predictions:consumed:* +ping +hset +hgetall +zadd +zrevrange +multi +exec +select +client
           EOF
 
           chmod 644 secrets/redis_*
@@ -46,9 +46,22 @@ jobs:
       - name: Pull image
         run: docker pull $IMAGE
 
-      - name: Start vault and redis
+      - name: Start vault, redis and kafka
         run: |
-          IMAGE=$IMAGE APP_PORT=$APP_PORT docker compose up -d --no-build vault redis
+          IMAGE=$IMAGE APP_PORT=$APP_PORT docker compose up -d --no-build vault redis kafka
+
+      - name: Wait for kafka
+        run: |
+          for i in $(seq 1 30); do
+            if docker compose exec -T kafka sh -lc '/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list >/dev/null 2>&1'; then
+              echo "Kafka is up"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "Kafka did not start"
+          docker compose logs --no-color kafka || true
+          exit 1
 
       - name: Bootstrap Vault
         env:
@@ -57,11 +70,31 @@ jobs:
           REDIS_DB: ${{ secrets.REDIS_DB_INDEX }}
           REDIS_USERNAME: ${{ secrets.REDIS_APP_USERNAME }}
           REDIS_PASSWORD: ${{ secrets.REDIS_APP_PASSWORD }}
-        run: ./scripts/bootstrap_vault.sh
-
-      - name: Start web
+          KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+          KAFKA_TOPIC_PREDICTIONS: predictions.created
+          KAFKA_CONSUMER_GROUP: catdog-consumer
         run: |
-          IMAGE=$IMAGE APP_PORT=$APP_PORT docker compose up -d --no-build web
+          ./scripts/bootstrap_vault.sh
+          ROLE_ID="$(cat .vault-local/role_id)"
+          SECRET_ID="$(cat .vault-local/secret_id)"
+          echo "::add-mask::$ROLE_ID"
+          echo "::add-mask::$SECRET_ID"
+
+      - name: Create kafka topic
+        run: |
+          docker compose exec -T kafka sh -lc '
+            /opt/kafka/bin/kafka-topics.sh \
+              --bootstrap-server localhost:9092 \
+              --create \
+              --if-not-exists \
+              --topic predictions.created \
+              --partitions 1 \
+              --replication-factor 1
+          '
+
+      - name: Start web and consumer
+        run: |
+          IMAGE=$IMAGE APP_PORT=$APP_PORT docker compose up -d --no-build web consumer
 
       - name: Wait for API
         run: |
@@ -75,7 +108,9 @@ jobs:
           echo "API did not start"
           docker compose logs --no-color vault || true
           docker compose logs --no-color redis || true
+          docker compose logs --no-color kafka || true
           docker compose logs --no-color web || true
+          docker compose logs --no-color consumer || true
           exit 1
 
       - name: Functional test (POST /predict twice)
@@ -102,10 +137,16 @@ jobs:
           python - << 'PY'
           import json
 
+          def normalize_prediction(data):
+              if "prediction" in data:
+                  return data["prediction"]
+              return data
+
           def load_p(path):
               data = json.load(open(path, "r", encoding="utf-8"))
-              assert "dogProbability" in data, data
-              p = data["dogProbability"]
+              pred = normalize_prediction(data)
+              assert "dogProbability" in pred, pred
+              p = pred["dogProbability"]
               assert isinstance(p, (int, float)), type(p)
               assert 0.0 <= p <= 1.0, p
               return float(p)
@@ -130,11 +171,16 @@ jobs:
           python - << 'PY'
           import json
 
+          def normalize_prediction(data):
+              if "prediction" in data:
+                  return data["prediction"]
+              return data
+
           with open("cat_resp.json", "r", encoding="utf-8") as f:
-              cat_resp = json.load(f)
+              cat_resp = normalize_prediction(json.load(f))
 
           with open("dog_resp.json", "r", encoding="utf-8") as f:
-              dog_resp = json.load(f)
+              dog_resp = normalize_prediction(json.load(f))
 
           with open("preds.json", "r", encoding="utf-8") as f:
               preds = json.load(f)
@@ -168,7 +214,9 @@ jobs:
         run: |
           docker compose logs --no-color vault || true
           docker compose logs --no-color redis || true
+          docker compose logs --no-color kafka || true
           docker compose logs --no-color web || true
+          docker compose logs --no-color consumer || true
 
       - name: Cleanup
         if: always()
