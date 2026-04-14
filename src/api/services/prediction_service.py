@@ -16,13 +16,11 @@ class PredictionService:
         ml_service,
         repository: PredictionRepository,
         model_version: str,
-        prediction_repository,
         event_producer=None,
     ) -> None:
         self.ml_service = ml_service
         self.repository = repository
         self.model_version = model_version
-        self.prediction_repository = prediction_repository
         self.event_producer = event_producer
 
     async def _wait_until_consumed(
@@ -34,7 +32,7 @@ class PredictionService:
         elapsed = 0.0
 
         while elapsed < timeout_seconds:
-            consumed = await self.prediction_repository.get_consumed_by_id(prediction_id)
+            consumed = await self.repository.get_consumed_by_id(prediction_id)
             if consumed is not None:
                 return True
 
@@ -87,4 +85,4 @@ class PredictionService:
         )
 
     async def get_last_consumed_predictions(self, limit: int) -> list[PredictionRecord]:
-        return await self.prediction_repository.get_last_consumed(limit)
+        return await self.repository.get_last_consumed(limit)

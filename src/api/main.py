@@ -5,6 +5,7 @@ from urllib.parse import quote
 from fastapi import FastAPI
 from redis.asyncio import from_url
 
+from src.api.repositories.prediction_repository import PredictionRepository
 from src.api.routes import router
 from src.api.services.prediction_service import PredictionService
 from src.common.vault_client import read_kv_secret_from_vault_with_retry
@@ -43,8 +44,11 @@ async def lifespan(app: FastAPI):
     model_service.set_device(device)
     model_service.load_classifier(classifier_key)
 
+    repository = PredictionRepository(redis)
+
     prediction_service = PredictionService(
         ml_service=model_service,
+        repository=repository,
         model_version=model_version,
         event_producer=producer,
     )

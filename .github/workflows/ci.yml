@@ -32,18 +32,28 @@ jobs:
           printf "%s" "${{ secrets.REDIS_DB_INDEX }}" > secrets/redis_db.txt
           printf "%s" "${{ secrets.REDIS_APP_USERNAME }}" > secrets/redis_username.txt
           printf "%s" "${{ secrets.REDIS_APP_PASSWORD }}" > secrets/redis_password.txt
-
+          printf "%s" "${{ secrets.KAFKA_BOOTSTRAP_SERVERS }}" > secrets/kafka_bootstrap_servers.txt
+          printf "%s" "${{ secrets.KAFKA_TOPIC_PREDICTIONS }}" > secrets/kafka_topic_predictions.txt
+          printf "%s" "${{ secrets.KAFKA_CONSUMER_GROUP }}" > secrets/kafka_consumer_group.txt
+          printf "%s" "${{ secrets.KAFKA_NODE_ID }}" > secrets/kafka_node_id.txt
+          printf "%s" "${{ secrets.KAFKA_PORT }}" > secrets/kafka_port.txt
+          
           echo "::add-mask::${{ secrets.REDIS_HOST_INTERNAL }}"
           echo "::add-mask::${{ secrets.REDIS_PORT_INTERNAL }}"
           echo "::add-mask::${{ secrets.REDIS_APP_USERNAME }}"
           echo "::add-mask::${{ secrets.REDIS_APP_PASSWORD }}"
-
+          echo "::add-mask::${{ secrets.KAFKA_BOOTSTRAP_SERVERS }}"
+          echo "::add-mask::${{ secrets.KAFKA_TOPIC_PREDICTIONS }}"
+          echo "::add-mask::${{ secrets.KAFKA_CONSUMER_GROUP }}"
+          echo "::add-mask::${{ secrets.KAFKA_NODE_ID }}"
+          echo "::add-mask::${{ secrets.KAFKA_PORT }}"
+          
           cat > secrets/redis_users.acl <<EOF
           user default off
           user ${{ secrets.REDIS_APP_USERNAME }} on >${{ secrets.REDIS_APP_PASSWORD }} ~prediction:* ~predictions:* ~prediction-consumed:* ~predictions:consumed:* +ping +hset +hgetall +zadd +zrevrange +multi +exec +select +client
           EOF
           
-          chmod 644 secrets/redis_*
+          chmod 644 secrets/*
 
       - name: Make bootstrap script executable
         run: chmod +x scripts/bootstrap_vault.sh
@@ -71,9 +81,9 @@ jobs:
           REDIS_DB: ${{ secrets.REDIS_DB_INDEX }}
           REDIS_USERNAME: ${{ secrets.REDIS_APP_USERNAME }}
           REDIS_PASSWORD: ${{ secrets.REDIS_APP_PASSWORD }}
-          KAFKA_BOOTSTRAP_SERVERS: kafka:9092
-          KAFKA_TOPIC_PREDICTIONS: predictions.created
-          KAFKA_CONSUMER_GROUP: catdog-consumer
+          KAFKA_BOOTSTRAP_SERVERS: ${{ secrets.KAFKA_BOOTSTRAP_SERVERS }}
+          KAFKA_TOPIC_PREDICTIONS: ${{ secrets.KAFKA_NODE_ID }}
+          KAFKA_CONSUMER_GROUP: ${{ secrets.KAFKA_CONSUMER_GROUP }}
         run: |
           ./scripts/bootstrap_vault.sh
           ROLE_ID="$(cat .vault-local/role_id)"
@@ -85,11 +95,14 @@ jobs:
       - name: Create kafka topic
         run: |
           docker compose exec -T kafka sh -lc '
+            KAFKA_PORT="$(cat /run/secrets/kafka_port)"
+            KAFKA_TOPIC_PREDICTIONS="$(cat /run/secrets/kafka_topic_predictions)"
+      
             /opt/kafka/bin/kafka-topics.sh \
-              --bootstrap-server localhost:9092 \
+              --bootstrap-server "localhost:${KAFKA_PORT}" \
               --create \
               --if-not-exists \
-              --topic predictions.created \
+              --topic "${KAFKA_TOPIC_PREDICTIONS}" \
               --partitions 1 \
               --replication-factor 1
           '
