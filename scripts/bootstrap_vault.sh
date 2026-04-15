@@ -13,7 +13,17 @@ REDIS_USERNAME="${REDIS_USERNAME:-model_writer}"
 REDIS_PASSWORD="${REDIS_PASSWORD:-strong_password}"
 
 KAFKA_BOOTSTRAP_SERVERS="${KAFKA_BOOTSTRAP_SERVERS:-kafka:9092}"
+
+KAFKA_CONFIG_FILE="${KAFKA_CONFIG_FILE:-config/kafka.env}"
+
+if [[ -f "$KAFKA_CONFIG_FILE" ]]; then
+  set -a
+  source "$KAFKA_CONFIG_FILE"
+  set +a
+fi
+
 KAFKA_TOPIC_PREDICTIONS="${KAFKA_TOPIC_PREDICTIONS:-predictions.created}"
+
 KAFKA_CONSUMER_GROUP="${KAFKA_CONSUMER_GROUP:-catdog-consumer}"
 
 mkdir -p "$OUT_DIR"
